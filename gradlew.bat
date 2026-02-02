@@ -203,3 +203,5 @@ fn main() {
     println!("   - Modo TÚNEL: Lento mas Seguro ✅");
     println!("   - Sistema ACHO TUDO: Ativo ✅");
 }
+
+
