@@ -1,0 +1,385 @@
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
+use std::time::{Duration, Instant};
+use aes_gcm::{Aes256Gcm, Key, Nonce};
+use aes_gcm::aead::{Aead, NewAead};
+use rand::Rng;
+use serde::{Serialize, Deserialize};
+use sha2::{Sha256, Digest};
+use crossbeam_channel::{bounded, Sender, Receiver};
+
+// Estruturas de dados
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct EncryptedLayer {
+    encrypted_data: Vec<u8>,
+    next_hop: String,
+    nonce: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct GarlicMessage {
+    messages: Vec<EncryptedLayer>,
+    timestamp: u64,
+    batch_id: u128,
+    routing_path: Vec<String>,
+}
+
+struct OnionRouter {
+    id: String,
+    country: String,
+    relay_table: HashMap<String, String>, // IP -> País
+    encryption_key: [u8; 32],
+    message_buffer: Arc<Mutex<Vec<EncryptedLayer>>>,
+    max_batch_size: usize,
+}
+
+#[derive(Clone)]
+struct Circuit {
+    path: Vec<String>,
+    session_keys: Vec<[u8; 32]>,
+    current_hop: usize,
+    circuit_id: u128,
+}
+
+// Otimizações
+const BATCH_SIZE: usize = 150;
+const MAX_HOPS: usize = 5;
+const BUFFER_TIMEOUT_MS: u64 = 50;
+
+impl OnionRouter {
+    fn new(id: String, country: String) -> Self {
+        let mut rng = rand::thread_rng();
+        let mut key = [0u8; 32];
+        rng.fill(&mut key);
+        
+        OnionRouter {
+            id,
+            country,
+            relay_table: HashMap::new(),
+            encryption_key: key,
+            message_buffer: Arc::new(Mutex::new(Vec::with_capacity(BATCH_SIZE))),
+            max_batch_size: BATCH_SIZE,
+        }
+    }
+    
+    fn add_relay(&mut self, ip: String, country: String) {
+        self.relay_table.insert(ip, country);
+    }
+    
+    fn encrypt_layer(&self, data: &[u8], next_hop: &str) -> Result<EncryptedLayer, String> {
+        let mut rng = rand::thread_rng();
+        let key = Key::from_slice(&self.encryption_key);
+        let cipher = Aes256Gcm::new(key);
+        
+        let nonce_bytes: [u8; 12] = rng.gen();
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        
+        match cipher.encrypt(nonce, data) {
+            Ok(encrypted_data) => Ok(EncryptedLayer {
+                encrypted_data,
+                next_hop: next_hop.to_string(),
+                nonce: nonce_bytes.to_vec(),
+            }),
+            Err(e) => Err(format!("Encryption failed: {}", e)),
+        }
+    }
+    
+    fn decrypt_layer(&self, layer: &EncryptedLayer) -> Result<Vec<u8>, String> {
+        let key = Key::from_slice(&self.encryption_key);
+        let cipher = Aes256Gcm::new(key);
+        let nonce = Nonce::from_slice(&layer.nonce);
+        
+        match cipher.decrypt(nonce, layer.encrypted_data.as_ref()) {
+            Ok(decrypted) => Ok(decrypted),
+            Err(e) => Err(format!("Decryption failed: {}", e)),
+        }
+    }
+    
+    fn process_batch(&self, batch: Vec<EncryptedLayer>) -> GarlicMessage {
+        let mut rng = rand::thread_rng();
+        
+        // Seleciona rota otimizada passando por países fronteiriços
+        let routing_path = self.optimize_route();
+        
+        GarlicMessage {
+            messages: batch,
+            timestamp: Instant::now().elapsed().as_secs(),
+            batch_id: rng.gen(),
+            routing_path,
+        }
+    }
+    
+    fn optimize_route(&self) -> Vec<String> {
+        // Rota otimizada passando por países fronteiriços específicos
+        let border_countries = vec![
+            "BR-PY",    // Brasil-Paraguai
+            "PY-AR",    // Paraguai-Argentina
+            "AR-CL",    // Argentina-Chile
+            "CL-PE",    // Chile-Peru
+            "PE-BO",    // Peru-Bolívia
+        ];
+        
+        // Seleciona 3-5 saltos aleatórios da lista
+        let mut rng = rand::thread_rng();
+        let hops = (3..=5).map(|_| {
+            border_countries[rng.gen_range(0..border_countries.len())].to_string()
+        }).collect();
+        
+        hops
+    }
+    
+    fn start_processing(&self, tx: Sender<GarlicMessage>) {
+        let buffer = self.message_buffer.clone();
+        let max_batch = self.max_batch_size;
+        let router_id = self.id.clone();
+        
+        thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_millis(BUFFER_TIMEOUT_MS));
+                
+                let mut buffer_lock = buffer.lock().unwrap();
+                if buffer_lock.len() >= max_batch || 
+                   (!buffer_lock.is_empty() && buffer_lock.len() >= max_batch / 3) {
+                    
+                    let batch = buffer_lock.drain(..).collect();
+                    drop(buffer_lock);
+                    
+                    let garlic_message = self.process_batch(batch);
+                    
+                    if let Err(e) = tx.send(garlic_message) {
+                        eprintln!("Router {}: Failed to send batch: {}", router_id, e);
+                    }
+                }
+            }
+        });
+    }
+}
+
+struct GarlicRouterNetwork {
+    routers: HashMap<String, Arc<OnionRouter>>,
+    circuits: HashMap<u128, Circuit>,
+    border_routers: Vec<String>,
+}
+
+impl GarlicRouterNetwork {
+    fn new() -> Self {
+        GarlicRouterNetwork {
+            routers: HashMap::new(),
+            circuits: HashMap::new(),
+            border_routers: Vec::new(),
+        }
+    }
+    
+    fn add_router(&mut self, router: OnionRouter) {
+        let id = router.id.clone();
+        if router.country.contains("-") {
+            self.border_routers.push(id.clone());
+        }
+        self.routers.insert(id, Arc::new(router));
+    }
+    
+    fn create_circuit(&mut self, exit_country: &str) -> Result<u128, String> {
+        let mut rng = rand::thread_rng();
+        let circuit_id: u128 = rng.gen();
+        
+        // Seleciona rota otimizada com países fronteiriços
+        let mut path = Vec::new();
+        let mut session_keys = Vec::new();
+        
+        // Primeiro salto sempre para um router fronteiriço
+        if let Some(first_hop) = self.border_routers.first() {
+            path.push(first_hop.clone());
+            
+            let mut key = [0u8; 32];
+            rng.fill(&mut key);
+            session_keys.push(key);
+        }
+        
+        // Adiciona mais 2-4 saltos por países fronteiriços
+        for _ in 0..rng.gen_range(2..=4) {
+            if let Some(router_id) = self.border_routers.get(rng.gen_range(0..self.border_routers.len())) {
+                path.push(router_id.clone());
+                
+                let mut key = [0u8; 32];
+                rng.fill(&mut key);
+                session_keys.push(key);
+            }
+        }
+        
+        // Último salto para o país de saída
+        path.push(format!("exit-{}", exit_country));
+        let mut key = [0u8; 32];
+        rng.fill(&mut key);
+        session_keys.push(key);
+        
+        let circuit = Circuit {
+            path,
+            session_keys,
+            current_hop: 0,
+            circuit_id,
+        };
+        
+        self.circuits.insert(circuit_id, circuit);
+        Ok(circuit_id)
+    }
+    
+    fn send_message(&self, circuit_id: u128, data: &[u8]) -> Result<(), String> {
+        let circuit = self.circuits.get(&circuit_id)
+            .ok_or("Circuit not found")?;
+        
+        let mut current_data = data.to_vec();
+        
+        // Encaminhamento onion: criptografia em camadas
+        for (i, router_id) in circuit.path.iter().enumerate().rev() {
+            if let Some(router) = self.routers.get(router_id) {
+                let next_hop = if i < circuit.path.len() - 1 {
+                    &circuit.path[i + 1]
+                } else {
+                    "EXIT"
+                };
+                
+                let layer_data = serde_json::to_vec(&(
+                    next_hop,
+                    current_data
+                )).map_err(|e| e.to_string())?;
+                
+                current_data = router.encrypt_layer(&layer_data, next_hop)?
+                    .encrypted_data;
+            }
+        }
+        
+        // Encaminha para o primeiro hop
+        if let Some(first_router) = self.routers.get(&circuit.path[0]) {
+            let buffer = first_router.message_buffer.clone();
+            let mut buffer_lock = buffer.lock().unwrap();
+            
+            let layer = EncryptedLayer {
+                encrypted_data: current_data,
+                next_hop: circuit.path[1].clone(),
+                nonce: vec![0; 12], // Será regenerado no router
+            };
+            
+            buffer_lock.push(layer);
+            
+            if buffer_lock.len() >= BATCH_SIZE {
+                // Processamento em lote otimizado
+                let batch = buffer_lock.drain(..).collect();
+                drop(buffer_lock);
+                
+                // Em produção, enviaria para o próximo hop
+                println!("Batch of {} messages ready for processing", batch.len());
+            }
+        }
+        
+        Ok(())
+    }
+}
+
+// Worker para processamento paralelo
+struct MessageWorker {
+    id: usize,
+    rx: Receiver<GarlicMessage>,
+}
+
+impl MessageWorker {
+    fn new(id: usize, rx: Receiver<GarlicMessage>) -> Self {
+        MessageWorker { id, rx }
+    }
+    
+    fn start(self) {
+        thread::spawn(move || {
+            while let Ok(garlic_message) = self.rx.recv() {
+                self.process_garlic_message(garlic_message);
+            }
+        });
+    }
+    
+    fn process_garlic_message(&self, message: GarlicMessage) {
+        println!(
+            "Worker {} processing batch {} with {} messages via route: {:?}",
+            self.id,
+            message.batch_id,
+            message.messages.len(),
+            message.routing_path
+        );
+        
+        // Simula processamento em paralelo
+        for (i, layer) in message.messages.iter().enumerate() {
+            if i % 50 == 0 {
+                println!("Worker {}: Processing message {}", self.id, i);
+            }
+            
+            // Em produção, aqui estaria o processamento real de cada camada
+            thread::sleep(Duration::from_micros(100)); // Simula trabalho
+        }
+    }
+}
+
+// Função principal de exemplo
+fn main() {
+    let mut network = GarlicRouterNetwork::new();
+    
+    // Cria routers em países fronteiriços
+    let border_routers = vec![
+        ("router-br-py", "BR-PY"),
+        ("router-py-ar", "PY-AR"),
+        ("router-ar-cl", "AR-CL"),
+        ("router-cl-pe", "CL-PE"),
+        ("router-pe-bo", "PE-BO"),
+        ("router-bo-br", "BO-BR"),
+        ("router-uy-ar", "UY-AR"),
+        ("router-ar-uy", "AR-UY"),
+    ];
+    
+    for (id, country) in border_routers {
+        let router = OnionRouter::new(id.to_string(), country.to_string());
+        network.add_router(router);
+    }
+    
+    // Cria canal para processamento em lote
+    let (tx, rx) = bounded::<GarlicMessage>(100);
+    
+    // Inicia workers paralelos
+    for i in 0..4 {
+        let worker_rx = rx.clone();
+        let worker = MessageWorker::new(i, worker_rx);
+        worker.start();
+    }
+    
+    // Inicia processamento nos routers
+    for router in network.routers.values() {
+        let tx_clone = tx.clone();
+        let router_clone = Arc::clone(router);
+        
+        thread::spawn(move || {
+            router_clone.start_processing(tx_clone);
+        });
+    }
+    
+    // Cria circuito e envia mensagens
+    match network.create_circuit("CL") {
+        Ok(circuit_id) => {
+            println!("Circuit created: {}", circuit_id);
+            
+            // Simula envio de 450 mensagens (3 batches de 150)
+            for i in 0..450 {
+                let message = format!("Message {} - Test data", i);
+                
+                if let Err(e) = network.send_message(circuit_id, message.as_bytes()) {
+                    eprintln!("Failed to send message {}: {}", i, e);
+                }
+                
+                if i % 50 == 0 {
+                    println!("Sent {} messages", i);
+                }
+                
+                thread::sleep(Duration::from_micros(10));
+            }
+        }
+        Err(e) => eprintln!("Failed to create circuit: {}", e),
+    }
+    
+    thread::sleep(Duration::from_secs(5));
+    println!("Simulation complete");
+}
