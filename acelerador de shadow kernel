@@ -1,0 +1,417 @@
+//! Sistema de Criptografia e Roteamento Onion/Garlic Otimizado
+//! 
+//! Este código implementa:
+//! - Criptografia ChaCha20 com Assembly inline para operações críticas
+//! - Roteador Onion/Garlic com processamento paralelo
+//! - Otimizações para baixa latência e alto throughput
+
+use std::arch::asm;
+use std::sync::Arc;
+use tokio::sync::Semaphore;
+use rayon::prelude::*;
+
+// ============================================================================
+// CRIPTOGRAFIA OTIMIZADA COM ASSEMBLY
+// ============================================================================
+
+/// Estrutura para criptografia ChaCha20 otimizada
+pub struct FastChaCha20 {
+    state: [u32; 16],
+    keystream: [u8; 64],
+    position: usize,
+}
+
+impl FastChaCha20 {
+    /// Cria uma nova instância com chave e nonce
+    pub fn new(key: &[u8; 32], nonce: &[u8; 12]) -> Self {
+        let mut state = [0u32; 16];
+        
+        // Constantes ChaCha20
+        state[0] = 0x61707865;
+        state[1] = 0x3320646e;
+        state[2] = 0x79622d32;
+        state[3] = 0x6b206574;
+        
+        // Chave (256 bits)
+        for i in 0..8 {
+            state[4 + i] = u32::from_le_bytes([
+                key[i * 4],
+                key[i * 4 + 1],
+                key[i * 4 + 2],
+                key[i * 4 + 3],
+            ]);
+        }
+        
+        // Counter
+        state[12] = 0;
+        
+        // Nonce (96 bits)
+        for i in 0..3 {
+            state[13 + i] = u32::from_le_bytes([
+                nonce[i * 4],
+                nonce[i * 4 + 1],
+                nonce[i * 4 + 2],
+                nonce[i * 4 + 3],
+            ]);
+        }
+        
+        FastChaCha20 {
+            state,
+            keystream: [0; 64],
+            position: 64,
+        }
+    }
+    
+    /// Quarter round otimizado com Assembly inline (x86_64)
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    fn quarter_round_asm(a: &mut u32, b: &mut u32, c: &mut u32, d: &mut u32) {
+        unsafe {
+            asm!(
+                // a += b; d ^= a; d <<<= 16;
+                "add {a:e}, {b:e}",
+                "xor {d:e}, {a:e}",
+                "rol {d:e}, 16",
+                
+                // c += d; b ^= c; b <<<= 12;
+                "add {c:e}, {d:e}",
+                "xor {b:e}, {c:e}",
+                "rol {b:e}, 12",
+                
+                // a += b; d ^= a; d <<<= 8;
+                "add {a:e}, {b:e}",
+                "xor {d:e}, {a:e}",
+                "rol {d:e}, 8",
+                
+                // c += d; b ^= c; b <<<= 7;
+                "add {c:e}, {d:e}",
+                "xor {b:e}, {c:e}",
+                "rol {b:e}, 7",
+                
+                a = inout(reg) *a,
+                b = inout(reg) *b,
+                c = inout(reg) *c,
+                d = inout(reg) *d,
+                options(pure, nomem, nostack)
+            );
+        }
+    }
+    
+    /// Quarter round fallback para outras arquiteturas
+    #[cfg(not(target_arch = "x86_64"))]
+    #[inline(always)]
+    fn quarter_round_asm(a: &mut u32, b: &mut u32, c: &mut u32, d: &mut u32) {
+        *a = a.wrapping_add(*b); *d ^= *a; *d = d.rotate_left(16);
+        *c = c.wrapping_add(*d); *b ^= *c; *b = b.rotate_left(12);
+        *a = a.wrapping_add(*b); *d ^= *a; *d = d.rotate_left(8);
+        *c = c.wrapping_add(*d); *b ^= *c; *b = b.rotate_left(7);
+    }
+    
+    /// Gera um bloco de keystream
+    fn generate_block(&mut self) {
+        let mut working_state = self.state;
+        
+        // 20 rounds (10 double rounds)
+        for _ in 0..10 {
+            // Column rounds
+            Self::quarter_round_asm(&mut working_state[0], &mut working_state[4], 
+                                   &mut working_state[8], &mut working_state[12]);
+            Self::quarter_round_asm(&mut working_state[1], &mut working_state[5], 
+                                   &mut working_state[9], &mut working_state[13]);
+            Self::quarter_round_asm(&mut working_state[2], &mut working_state[6], 
+                                   &mut working_state[10], &mut working_state[14]);
+            Self::quarter_round_asm(&mut working_state[3], &mut working_state[7], 
+                                   &mut working_state[11], &mut working_state[15]);
+            
+            // Diagonal rounds
+            Self::quarter_round_asm(&mut working_state[0], &mut working_state[5], 
+                                   &mut working_state[10], &mut working_state[15]);
+            Self::quarter_round_asm(&mut working_state[1], &mut working_state[6], 
+                                   &mut working_state[11], &mut working_state[12]);
+            Self::quarter_round_asm(&mut working_state[2], &mut working_state[7], 
+                                   &mut working_state[8], &mut working_state[13]);
+            Self::quarter_round_asm(&mut working_state[3], &mut working_state[4], 
+                                   &mut working_state[9], &mut working_state[14]);
+        }
+        
+        // Add original state
+        for i in 0..16 {
+            working_state[i] = working_state[i].wrapping_add(self.state[i]);
+        }
+        
+        // Convert to bytes
+        for i in 0..16 {
+            let bytes = working_state[i].to_le_bytes();
+            self.keystream[i * 4..(i + 1) * 4].copy_from_slice(&bytes);
+        }
+        
+        // Increment counter
+        self.state[12] = self.state[12].wrapping_add(1);
+        self.position = 0;
+    }
+    
+    /// Criptografa/descriptografa dados in-place
+    pub fn apply_keystream(&mut self, data: &mut [u8]) {
+        for byte in data.iter_mut() {
+            if self.position >= 64 {
+                self.generate_block();
+            }
+            *byte ^= self.keystream[self.position];
+            self.position += 1;
+        }
+    }
+}
+
+// ============================================================================
+// ROTEADOR ONION/GARLIC
+// ============================================================================
+
+/// Representa uma camada de criptografia onion
+#[derive(Clone)]
+pub struct OnionLayer {
+    pub key: [u8; 32],
+    pub nonce: [u8; 12],
+    pub next_hop: Option<String>,
+}
+
+/// Pacote onion com múltiplas camadas
+pub struct OnionPacket {
+    pub data: Vec<u8>,
+    pub layers: Vec<OnionLayer>,
+}
+
+impl OnionPacket {
+    /// Cria um novo pacote onion
+    pub fn new(payload: Vec<u8>, route: Vec<OnionLayer>) -> Self {
+        OnionPacket {
+            data: payload,
+            layers: route,
+        }
+    }
+    
+    /// Encapsula o pacote com todas as camadas (ordem reversa)
+    pub fn wrap(&mut self) {
+        // Processa camadas em ordem reversa para construir o onion
+        for layer in self.layers.iter().rev() {
+            let mut cipher = FastChaCha20::new(&layer.key, &layer.nonce);
+            
+            // Adiciona informação de roteamento se houver
+            if let Some(ref next_hop) = layer.next_hop {
+                let hop_bytes = next_hop.as_bytes();
+                let hop_len = (hop_bytes.len() as u16).to_le_bytes();
+                
+                // Prepend: [tamanho do hop][hop][dados]
+                let mut new_data = Vec::with_capacity(2 + hop_bytes.len() + self.data.len());
+                new_data.extend_from_slice(&hop_len);
+                new_data.extend_from_slice(hop_bytes);
+                new_data.extend_from_slice(&self.data);
+                self.data = new_data;
+            }
+            
+            // Criptografa a camada
+            cipher.apply_keystream(&mut self.data);
+        }
+    }
+    
+    /// Remove uma camada de criptografia
+    pub fn unwrap_layer(&mut self, key: &[u8; 32], nonce: &[u8; 12]) -> Option<String> {
+        let mut cipher = FastChaCha20::new(key, nonce);
+        cipher.apply_keystream(&mut self.data);
+        
+        // Extrai informação de roteamento
+        if self.data.len() < 2 {
+            return None;
+        }
+        
+        let hop_len = u16::from_le_bytes([self.data[0], self.data[1]]) as usize;
+        
+        if self.data.len() < 2 + hop_len {
+            return None;
+        }
+        
+        let next_hop = String::from_utf8_lossy(&self.data[2..2 + hop_len]).to_string();
+        self.data = self.data[2 + hop_len..].to_vec();
+        
+        Some(next_hop)
+    }
+}
+
+// ============================================================================
+// ROTEADOR GARLIC (PARALELIZADO)
+// ============================================================================
+
+/// Roteador Garlic para processamento paralelo de múltiplos pacotes
+pub struct GarlicRouter {
+    max_concurrent: Arc<Semaphore>,
+    thread_pool_size: usize,
+}
+
+impl GarlicRouter {
+    /// Cria um novo roteador Garlic
+    pub fn new(max_concurrent_packets: usize) -> Self {
+        GarlicRouter {
+            max_concurrent: Arc::new(Semaphore::new(max_concurrent_packets)),
+            thread_pool_size: num_cpus::get(),
+        }
+    }
+    
+    /// Processa múltiplos pacotes em paralelo (Garlic routing)
+    pub async fn route_garlic_batch(&self, packets: Vec<OnionPacket>) -> Vec<OnionPacket> {
+        packets
+            .into_par_iter()
+            .map(|mut packet| {
+                // Processa cada pacote independentemente
+                packet.wrap();
+                packet
+            })
+            .collect()
+    }
+    
+    /// Descriptografa batch de pacotes
+    pub async fn unwrap_garlic_batch(
+        &self,
+        mut packets: Vec<OnionPacket>,
+        keys: &[[u8; 32]],
+        nonces: &[[u8; 12]],
+    ) -> Vec<(OnionPacket, Option<String>)> {
+        packets
+            .par_iter_mut()
+            .enumerate()
+            .map(|(i, packet)| {
+                let key = &keys[i % keys.len()];
+                let nonce = &nonces[i % nonces.len()];
+                let next_hop = packet.unwrap_layer(key, nonce);
+                (packet.clone(), next_hop)
+            })
+            .collect()
+    }
+}
+
+impl Clone for OnionPacket {
+    fn clone(&self) -> Self {
+        OnionPacket {
+            data: self.data.clone(),
+            layers: self.layers.clone(),
+        }
+    }
+}
+
+// ============================================================================
+// FUNÇÕES UTILITÁRIAS
+// ============================================================================
+
+/// Gera chave aleatória
+pub fn generate_key() -> [u8; 32] {
+    use rand::RngCore;
+    let mut key = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut key);
+    key
+}
+
+/// Gera nonce aleatório
+pub fn generate_nonce() -> [u8; 12] {
+    use rand::RngCore;
+    let mut nonce = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut nonce);
+    nonce
+}
+
+// ============================================================================
+// EXEMPLO DE USO
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_chacha20_encryption() {
+        let key = generate_key();
+        let nonce = generate_nonce();
+        let mut cipher = FastChaCha20::new(&key, &nonce);
+        
+        let mut data = b"Hello, World! This is a secret message.".to_vec();
+        let original = data.clone();
+        
+        cipher.apply_keystream(&mut data);
+        assert_ne!(data, original);
+        
+        // Decrypt
+        let mut decipher = FastChaCha20::new(&key, &nonce);
+        decipher.apply_keystream(&mut data);
+        assert_eq!(data, original);
+    }
+    
+    #[tokio::test]
+    async fn test_onion_routing() {
+        // Cria rota com 3 hops
+        let layers = vec![
+            OnionLayer {
+                key: generate_key(),
+                nonce: generate_nonce(),
+                next_hop: Some("node1.onion".to_string()),
+            },
+            OnionLayer {
+                key: generate_key(),
+                nonce: generate_nonce(),
+                next_hop: Some("node2.onion".to_string()),
+            },
+            OnionLayer {
+                key: generate_key(),
+                nonce: generate_nonce(),
+                next_hop: Some("destination.onion".to_string()),
+            },
+        ];
+        
+        let payload = b"Secret payload".to_vec();
+        let mut packet = OnionPacket::new(payload.clone(), layers.clone());
+        
+        // Encapsula
+        packet.wrap();
+        
+        // Desencapsula camada por camada
+        for layer in layers.iter() {
+            let next_hop = packet.unwrap_layer(&layer.key, &layer.nonce);
+            assert!(next_hop.is_some());
+        }
+        
+        assert_eq!(packet.data, payload);
+    }
+    
+    #[tokio::test]
+    async fn test_garlic_routing() {
+        let router = GarlicRouter::new(10);
+        
+        // Cria múltiplos pacotes
+        let mut packets = vec![];
+        for i in 0..5 {
+            let layer = OnionLayer {
+                key: generate_key(),
+                nonce: generate_nonce(),
+                next_hop: Some(format!("node{}.onion", i)),
+            };
+            let packet = OnionPacket::new(
+                format!("Payload {}", i).into_bytes(),
+                vec![layer],
+            );
+            packets.push(packet);
+        }
+        
+        // Processa em batch
+        let encrypted = router.route_garlic_batch(packets).await;
+        assert_eq!(encrypted.len(), 5);
+    }
+}
+
+fn main() {
+    println!("Sistema de Criptografia e Roteamento Onion/Garlic Otimizado");
+    println!("============================================================");
+    println!();
+    println!("Características:");
+    println!("✓ ChaCha20 com operações Assembly inline (x86_64)");
+    println!("✓ Onion routing com múltiplas camadas");
+    println!("✓ Garlic routing com processamento paralelo");
+    println!("✓ Otimizado para baixa latência e alto throughput");
+    println!();
+    println!("Execute 'cargo test' para testar as funcionalidades");
+}
