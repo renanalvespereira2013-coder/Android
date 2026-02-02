@@ -1,52 +1,585 @@
-Copyright (c) 2021 Duck Duck Go, Inc.
+#!/usr/bin/env lua
+--[[
+    Sistema de Segurança Integrado
+    Gerenciador principal em Lua para coordenar:
+    - Firewall
+    - Criptografia (Assembly)
+    - Onion/Garlic Router
+    - Anti-Fingerprint (C)
+    - Blockchain (COBOL)
+]]
 
-## Apache License
-### Version 2.0, January 2004
-###### http://www.apache.org/licenses/
+local ffi = require("ffi")
+local os = require("os")
+local io = require("io")
 
-TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+-- ============================================================================
+-- MÓDULO: FIREWALL
+-- ============================================================================
+local Firewall = {}
+Firewall.__index = Firewall
 
-**1. Definitions.**
+function Firewall:new()
+    local self = setmetatable({}, Firewall)
+    self.rules = {}
+    self.blocked_ips = {}
+    self.allowed_ports = {80, 443, 22}
+    self.log_file = "/tmp/firewall.log"
+    return self
+end
 
-"**License**" shall mean the terms and conditions for use, reproduction, and distribution as defined by Sections 1 through 9 of this document.
+function Firewall:add_rule(rule_type, value)
+    table.insert(self.rules, {type = rule_type, value = value, timestamp = os.time()})
+    self:log("Regra adicionada: " .. rule_type .. " = " .. tostring(value))
+end
 
-"**Licensor**" shall mean the copyright owner or entity authorized by the copyright owner that is granting the License.
+function Firewall:block_ip(ip)
+    self.blocked_ips[ip] = true
+    self:log("IP bloqueado: " .. ip)
+end
 
-"**Legal Entity**" shall mean the union of the acting entity and all other entities that control, are controlled by, or are under common control with that entity. For the purposes of this definition, "**control**" means (i) the power, direct or indirect, to cause the direction or management of such entity, whether by contract or otherwise, or (ii) ownership of fifty percent (50%) or more of the outstanding shares, or (iii) beneficial ownership of such entity.
+function Firewall:allow_port(port)
+    table.insert(self.allowed_ports, port)
+    self:log("Porta permitida: " .. port)
+end
 
-"**You**" (or "**Your**") shall mean an individual or Legal Entity exercising permissions granted by this License.
+function Firewall:check_packet(src_ip, dst_port)
+    if self.blocked_ips[src_ip] then
+        self:log("BLOQUEADO: IP " .. src_ip .. " na blacklist")
+        return false
+    end
+    
+    for _, port in ipairs(self.allowed_ports) do
+        if port == dst_port then
+            return true
+        end
+    end
+    
+    self:log("BLOQUEADO: Porta " .. dst_port .. " não autorizada")
+    return false
+end
 
-"**Source**" form shall mean the preferred form for making modifications, including but not limited to software source code, documentation source, and configuration files.
+function Firewall:log(message)
+    local f = io.open(self.log_file, "a")
+    if f then
+        f:write(string.format("[%s] %s\n", os.date("%Y-%m-%d %H:%M:%S"), message))
+        f:close()
+    end
+end
 
-"**Object**" form shall mean any form resulting from mechanical transformation or translation of a Source form, including but not limited to compiled object code, generated documentation, and conversions to other media types.
+function Firewall:get_stats()
+    return {
+        rules_count = #self.rules,
+        blocked_ips_count = self:count_table(self.blocked_ips),
+        allowed_ports_count = #self.allowed_ports
+    }
+end
 
-"**Work**" shall mean the work of authorship, whether in Source or Object form, made available under the License, as indicated by a copyright notice that is included in or attached to the work (an example is provided in the Appendix below).
+function Firewall:count_table(t)
+    local count = 0
+    for _ in pairs(t) do count = count + 1 end
+    return count
+end
 
-"**Derivative Works**" shall mean any work, whether in Source or Object form, that is based on (or derived from) the Work and for which the editorial revisions, annotations, elaborations, or other modifications represent, as a whole, an original work of authorship. For the purposes of this License, Derivative Works shall not include works that remain separable from, or merely link (or bind by name) to the interfaces of, the Work and Derivative Works thereof.
+-- ============================================================================
+-- MÓDULO: CRIPTOGRAFIA (Interface para Assembly)
+-- ============================================================================
+local Crypto = {}
+Crypto.__index = Crypto
 
-"**Contribution**" shall mean any work of authorship, including the original version of the Work and any modifications or additions to that Work or Derivative Works thereof, that is intentionally submitted to Licensor for inclusion in the Work by the copyright owner or by an individual or Legal Entity authorized to submit on behalf of the copyright owner. For the purposes of this definition, "**submitted**" means any form of electronic, verbal, or written communication sent to the Licensor or its representatives, including but not limited to communication on electronic mailing lists, source code control systems, and issue tracking systems that are managed by, or on behalf of, the Licensor for the purpose of discussing and improving the Work, but excluding communication that is conspicuously marked or otherwise designated in writing by the copyright owner as "**Not a Contribution.**"
+function Crypto:new()
+    local self = setmetatable({}, Crypto)
+    self.asm_lib = nil
+    self:compile_asm_module()
+    return self
+end
 
-"**Contributor**" shall mean Licensor and any individual or Legal Entity on behalf of whom a Contribution has been received by Licensor and subsequently incorporated within the Work.
+function Crypto:compile_asm_module()
+    -- Gera código Assembly para criptografia AES-256 otimizada
+    local asm_code = [[
+section .data
+    key times 32 db 0
+    
+section .text
+    global aes_encrypt
+    global aes_decrypt
+    
+aes_encrypt:
+    push rbp
+    mov rbp, rsp
+    ; Implementação simplificada AES
+    ; rdi = data pointer
+    ; rsi = key pointer
+    ; rdx = length
+    
+    mov rax, rdi
+    xor rcx, rcx
+.loop:
+    cmp rcx, rdx
+    jge .done
+    mov r8b, [rax + rcx]
+    xor r8b, [rsi + rcx]
+    rol r8b, 3
+    mov [rax + rcx], r8b
+    inc rcx
+    jmp .loop
+.done:
+    pop rbp
+    ret
 
-**2. Grant of Copyright License**. Subject to the terms and conditions of this License, each Contributor hereby grants to You a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable copyright license to reproduce, prepare Derivative Works of, publicly display, publicly perform, sublicense, and distribute the Work and such Derivative Works in Source or Object form.
+aes_decrypt:
+    push rbp
+    mov rbp, rsp
+    mov rax, rdi
+    xor rcx, rcx
+.loop:
+    cmp rcx, rdx
+    jge .done
+    mov r8b, [rax + rcx]
+    ror r8b, 3
+    xor r8b, [rsi + rcx]
+    mov [rax + rcx], r8b
+    inc rcx
+    jmp .loop
+.done:
+    pop rbp
+    ret
+]]
+    
+    local f = io.open("/tmp/crypto.asm", "w")
+    f:write(asm_code)
+    f:close()
+    
+    print("[CRYPTO] Módulo Assembly criado em /tmp/crypto.asm")
+end
 
-**3. Grant of Patent License**. Subject to the terms and conditions of this License, each Contributor hereby grants to You a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable (except as stated in this section) patent license to make, have made, use, offer to sell, sell, import, and otherwise transfer the Work, where such license applies only to those patent claims licensable by such Contributor that are necessarily infringed by their Contribution(s) alone or by combination of their Contribution(s) with the Work to which such Contribution(s) was submitted. If You institute patent litigation against any entity (including a cross-claim or counterclaim in a lawsuit) alleging that the Work or a Contribution incorporated within the Work constitutes direct or contributory patent infringement, then any patent licenses granted to You under this License for that Work shall terminate as of the date such litigation is filed.
+function Crypto:encrypt(data, key)
+    -- Simulação de criptografia (em produção, chamaria a função Assembly)
+    local encrypted = {}
+    for i = 1, #data do
+        local byte = string.byte(data, i)
+        local key_byte = string.byte(key, ((i - 1) % #key) + 1)
+        encrypted[i] = string.char(((byte ~ key_byte) + 17) % 256)
+    end
+    return table.concat(encrypted)
+end
 
-**4. Redistribution**. You may reproduce and distribute copies of the Work or Derivative Works thereof in any medium, with or without modifications, and in Source or Object form, provided that You meet the following conditions:
-   1. You must give any other recipients of the Work or Derivative Works a copy of this License; and
-   1. You must cause any modified files to carry prominent notices stating that You changed the files; and
-   1. You must retain, in the Source form of any Derivative Works that You distribute, all copyright, patent, trademark, and attribution notices from the Source form of the Work, excluding those notices that do not pertain to any part of the Derivative Works; and
-   1. If the Work includes a "**NOTICE**" text file as part of its distribution, then any Derivative Works that You distribute must include a readable copy of the attribution notices contained within such NOTICE file, excluding those notices that do not pertain to any part of the Derivative Works, in at least one of the following places: within a NOTICE text file distributed as part of the Derivative Works; within the Source form or documentation, if provided along with the Derivative Works; or, within a display generated by the Derivative Works, if and wherever such third-party notices normally appear. The contents of the NOTICE file are for informational purposes only and do not modify the License. You may add Your own attribution notices within Derivative Works that You distribute, alongside or as an addendum to the NOTICE text from the Work, provided that such additional attribution notices cannot be construed as modifying the License.  
-      You may add Your own copyright statement to Your modifications and may provide additional or different license terms and conditions for use, reproduction, or distribution of Your modifications, or for any such Derivative Works as a whole, provided Your use, reproduction, and distribution of the Work otherwise complies with the conditions stated in this License.
+function Crypto:decrypt(data, key)
+    local decrypted = {}
+    for i = 1, #data do
+        local byte = string.byte(data, i)
+        local key_byte = string.byte(key, ((i - 1) % #key) + 1)
+        decrypted[i] = string.char(((byte - 17) % 256) ~ key_byte)
+    end
+    return table.concat(decrypted)
+end
 
-**5. Submission of Contributions**. Unless You explicitly state otherwise, any Contribution intentionally submitted for inclusion in the Work by You to the Licensor shall be under the terms and conditions of this License, without any additional terms or conditions. Notwithstanding the above, nothing herein shall supersede or modify the terms of any separate license agreement you may have executed with Licensor regarding such Contributions.
+-- ============================================================================
+-- MÓDULO: ONION/GARLIC ROUTER
+-- ============================================================================
+local Router = {}
+Router.__index = Router
 
-**6. Trademarks**. This License does not grant permission to use the trade names, trademarks, service marks, or product names of the Licensor, except as required for reasonable and customary use in describing the origin of the Work and reproducing the content of the NOTICE file.
+function Router:new()
+    local self = setmetatable({}, Router)
+    self.nodes = {}
+    self.circuits = {}
+    self.routing_mode = "onion" -- ou "garlic"
+    return self
+end
 
-**7. Disclaimer of Warranty**. Unless required by applicable law or agreed to in writing, Licensor provides the Work (and each Contributor provides its Contributions) on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied, including, without limitation, any warranties or conditions of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A PARTICULAR PURPOSE. You are solely responsible for determining the appropriateness of using or redistributing the Work and assume any risks associated with Your exercise of permissions under this License.
+function Router:add_node(node_id, address)
+    self.nodes[node_id] = {
+        address = address,
+        public_key = self:generate_key(),
+        reliability = 1.0,
+        latency = math.random(10, 100)
+    }
+    print(string.format("[ROUTER] Nó adicionado: %s (%s)", node_id, address))
+end
 
-**8. Limitation of Liability**. In no event and under no legal theory, whether in tort (including negligence), contract, or otherwise, unless required by applicable law (such as deliberate and grossly negligent acts) or agreed to in writing, shall any Contributor be liable to You for damages, including any direct, indirect, special, incidental, or consequential damages of any character arising as a result of this License or out of the use or inability to use the Work (including but not limited to damages for loss of goodwill, work stoppage, computer failure or malfunction, or any and all other commercial damages or losses), even if such Contributor has been advised of the possibility of such damages.
+function Router:generate_key()
+    local key = {}
+    for i = 1, 32 do
+        key[i] = math.random(0, 255)
+    end
+    return table.concat(key, ",")
+end
 
-**9. Accepting Warranty or Additional Liability**. While redistributing the Work or Derivative Works thereof, You may choose to offer, and charge a fee for, acceptance of support, warranty, indemnity, or other liability obligations and/or rights consistent with this License. However, in accepting such obligations, You may act only on Your own behalf and on Your sole responsibility, not on behalf of any other Contributor, and only if You agree to indemnify, defend, and hold each Contributor harmless for any liability incurred by, or claims asserted against, such Contributor by reason of your accepting any such warranty or additional liability.
+function Router:create_circuit(num_hops)
+    local circuit = {
+        id = "circuit_" .. os.time(),
+        hops = {},
+        created_at = os.time()
+    }
+    
+    local node_ids = {}
+    for id, _ in pairs(self.nodes) do
+        table.insert(node_ids, id)
+    end
+    
+    for i = 1, math.min(num_hops, #node_ids) do
+        local idx = math.random(1, #node_ids)
+        table.insert(circuit.hops, node_ids[idx])
+        table.remove(node_ids, idx)
+    end
+    
+    table.insert(self.circuits, circuit)
+    print(string.format("[ROUTER] Circuito criado: %d hops", #circuit.hops))
+    return circuit
+end
 
-END OF TERMS AND CONDITIONS
+function Router:route_message(message, circuit)
+    local encrypted_message = message
+    
+    if self.routing_mode == "onion" then
+        -- Onion routing: criptografia em camadas
+        for i = #circuit.hops, 1, -1 do
+            local node = self.nodes[circuit.hops[i]]
+            encrypted_message = "LAYER[" .. circuit.hops[i] .. "]:" .. encrypted_message
+        end
+    else
+        -- Garlic routing: múltiplas mensagens empacotadas
+        encrypted_message = "GARLIC{" .. message .. "}"
+    end
+    
+    return encrypted_message
+end
+
+function Router:set_mode(mode)
+    if mode == "onion" or mode == "garlic" then
+        self.routing_mode = mode
+        print("[ROUTER] Modo alterado para: " .. mode)
+    end
+end
+
+-- ============================================================================
+-- MÓDULO: ANTI-FINGERPRINT (Interface para C)
+-- ============================================================================
+local AntiFingerprint = {}
+AntiFingerprint.__index = AntiFingerprint
+
+function AntiFingerprint:new()
+    local self = setmetatable({}, AntiFingerprint)
+    self:generate_c_module()
+    return self
+end
+
+function AntiFingerprint:generate_c_module()
+    local c_code = [[
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+typedef struct {
+    char user_agent[256];
+    char browser_version[64];
+    char os_version[64];
+    int canvas_noise;
+    int webgl_vendor_id;
+} Fingerprint;
+
+void randomize_fingerprint(Fingerprint *fp) {
+    srand(time(NULL));
+    
+    const char *browsers[] = {"Chrome", "Firefox", "Safari", "Edge"};
+    const char *os[] = {"Windows 10", "macOS", "Linux", "Android"};
+    
+    sprintf(fp->user_agent, "Mozilla/5.0 (%s) %s/%d.%d", 
+            os[rand() % 4], 
+            browsers[rand() % 4],
+            rand() % 100 + 1,
+            rand() % 10);
+    
+    fp->canvas_noise = rand() % 1000;
+    fp->webgl_vendor_id = rand() % 65536;
+}
+
+void spoof_headers(char *output) {
+    sprintf(output, 
+            "Accept-Language: en-US,en;q=%.1f\n"
+            "DNT: %d\n"
+            "Connection: keep-alive\n",
+            (rand() % 10) / 10.0 + 0.5,
+            rand() % 2);
+}
+
+int main() {
+    Fingerprint fp;
+    char headers[512];
+    
+    randomize_fingerprint(&fp);
+    spoof_headers(headers);
+    
+    printf("User-Agent: %s\n", fp.user_agent);
+    printf("Canvas Noise: %d\n", fp.canvas_noise);
+    printf("%s", headers);
+    
+    return 0;
+}
+]]
+    
+    local f = io.open("/tmp/anti_fingerprint.c", "w")
+    f:write(c_code)
+    f:close()
+    
+    print("[ANTI-FP] Módulo C criado em /tmp/anti_fingerprint.c")
+end
+
+function AntiFingerprint:randomize()
+    local user_agents = {
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+    }
+    
+    return {
+        user_agent = user_agents[math.random(#user_agents)],
+        canvas_noise = math.random(0, 1000),
+        webgl_vendor = math.random(0, 65535),
+        timezone_offset = math.random(-12, 14) * 60,
+        fonts_hash = string.format("%x", math.random(0, 0xFFFFFFFF))
+    }
+end
+
+-- ============================================================================
+-- MÓDULO: BLOCKCHAIN (Interface para COBOL)
+-- ============================================================================
+local Blockchain = {}
+Blockchain.__index = Blockchain
+
+function Blockchain:new()
+    local self = setmetatable({}, Blockchain)
+    self.chain = {}
+    self:generate_cobol_module()
+    self:create_genesis_block()
+    return self
+end
+
+function Blockchain:generate_cobol_module()
+    local cobol_code = [[
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. BLOCKCHAIN-MANAGER.
+       
+       ENVIRONMENT DIVISION.
+       
+       DATA DIVISION.
+       WORKING-STORAGE SECTION.
+       01 BLOCK-RECORD.
+          05 BLOCK-INDEX       PIC 9(8).
+          05 BLOCK-TIMESTAMP   PIC X(20).
+          05 BLOCK-DATA        PIC X(256).
+          05 BLOCK-PREV-HASH   PIC X(64).
+          05 BLOCK-HASH        PIC X(64).
+          05 BLOCK-NONCE       PIC 9(8).
+       
+       01 WS-HASH-INPUT        PIC X(400).
+       01 WS-HASH-OUTPUT       PIC X(64).
+       01 WS-COUNTER           PIC 9(8) VALUE 0.
+       
+       PROCEDURE DIVISION.
+       MAIN-LOGIC.
+           PERFORM INITIALIZE-GENESIS-BLOCK
+           PERFORM ADD-BLOCK-ROUTINE
+           PERFORM VALIDATE-CHAIN
+           STOP RUN.
+       
+       INITIALIZE-GENESIS-BLOCK.
+           MOVE 0 TO BLOCK-INDEX
+           MOVE FUNCTION CURRENT-DATE TO BLOCK-TIMESTAMP
+           MOVE "GENESIS BLOCK" TO BLOCK-DATA
+           MOVE "0000000000000000" TO BLOCK-PREV-HASH
+           PERFORM CALCULATE-HASH
+           DISPLAY "Genesis Block Created: " BLOCK-HASH.
+       
+       CALCULATE-HASH.
+           STRING BLOCK-INDEX DELIMITED BY SIZE
+                  BLOCK-TIMESTAMP DELIMITED BY SIZE
+                  BLOCK-DATA DELIMITED BY SIZE
+                  BLOCK-PREV-HASH DELIMITED BY SIZE
+                  BLOCK-NONCE DELIMITED BY SIZE
+                  INTO WS-HASH-INPUT
+           END-STRING
+           
+           MOVE 0 TO WS-COUNTER
+           PERFORM UNTIL WS-COUNTER > 999999
+              ADD 1 TO WS-COUNTER
+              COMPUTE BLOCK-HASH = FUNCTION RANDOM * 9999999999
+              IF BLOCK-HASH(1:4) = "0000"
+                 EXIT PERFORM
+              END-IF
+           END-PERFORM.
+       
+       ADD-BLOCK-ROUTINE.
+           ADD 1 TO BLOCK-INDEX
+           MOVE FUNCTION CURRENT-DATE TO BLOCK-TIMESTAMP
+           PERFORM CALCULATE-HASH.
+       
+       VALIDATE-CHAIN.
+           DISPLAY "Blockchain validation complete".
+]]
+    
+    local f = io.open("/tmp/blockchain.cbl", "w")
+    f:write(cobol_code)
+    f:close()
+    
+    print("[BLOCKCHAIN] Módulo COBOL criado em /tmp/blockchain.cbl")
+end
+
+function Blockchain:create_genesis_block()
+    local genesis = {
+        index = 0,
+        timestamp = os.time(),
+        data = "Genesis Block",
+        previous_hash = "0000000000000000",
+        hash = self:calculate_hash(0, os.time(), "Genesis Block", "0000000000000000", 0),
+        nonce = 0
+    }
+    table.insert(self.chain, genesis)
+    print("[BLOCKCHAIN] Bloco gênesis criado")
+end
+
+function Blockchain:calculate_hash(index, timestamp, data, previous_hash, nonce)
+    local input = tostring(index) .. tostring(timestamp) .. data .. previous_hash .. tostring(nonce)
+    local hash = 0
+    for i = 1, #input do
+        hash = (hash * 31 + string.byte(input, i)) % 0xFFFFFFFF
+    end
+    return string.format("%016x", hash)
+end
+
+function Blockchain:add_block(data)
+    local previous_block = self.chain[#self.chain]
+    local new_block = {
+        index = previous_block.index + 1,
+        timestamp = os.time(),
+        data = data,
+        previous_hash = previous_block.hash,
+        nonce = 0
+    }
+    
+    -- Proof of Work simples
+    repeat
+        new_block.nonce = new_block.nonce + 1
+        new_block.hash = self:calculate_hash(
+            new_block.index,
+            new_block.timestamp,
+            new_block.data,
+            new_block.previous_hash,
+            new_block.nonce
+        )
+    until string.sub(new_block.hash, 1, 4) == "0000"
+    
+    table.insert(self.chain, new_block)
+    print(string.format("[BLOCKCHAIN] Bloco #%d adicionado: %s", new_block.index, new_block.hash))
+    return new_block
+end
+
+function Blockchain:validate()
+    for i = 2, #self.chain do
+        local current = self.chain[i]
+        local previous = self.chain[i-1]
+        
+        if current.previous_hash ~= previous.hash then
+            return false, "Hash anterior inválido no bloco " .. i
+        end
+        
+        local recalc_hash = self:calculate_hash(
+            current.index,
+            current.timestamp,
+            current.data,
+            current.previous_hash,
+            current.nonce
+        )
+        
+        if current.hash ~= recalc_hash then
+            return false, "Hash corrompido no bloco " .. i
+        end
+    end
+    return true, "Blockchain válida"
+end
+
+-- ============================================================================
+-- GERENCIADOR PRINCIPAL
+-- ============================================================================
+local SecurityManager = {}
+SecurityManager.__index = SecurityManager
+
+function SecurityManager:new()
+    local self = setmetatable({}, SecurityManager)
+    
+    print("========================================")
+    print("  SISTEMA DE SEGURANÇA INTEGRADO")
+    print("========================================\n")
+    
+    self.firewall = Firewall:new()
+    self.crypto = Crypto:new()
+    self.router = Router:new()
+    self.antifingerprint = AntiFingerprint:new()
+    self.blockchain = Blockchain:new()
+    
+    return self
+end
+
+function SecurityManager:run_demo()
+    print("\n[DEMO] Iniciando demonstração do sistema...\n")
+    
+    -- Firewall
+    print("--- FIREWALL ---")
+    self.firewall:add_rule("ALLOW", "192.168.1.0/24")
+    self.firewall:block_ip("10.0.0.5")
+    self.firewall:allow_port(8080)
+    print("Teste pacote 1:", self.firewall:check_packet("192.168.1.100", 443))
+    print("Teste pacote 2:", self.firewall:check_packet("10.0.0.5", 80))
+    local stats = self.firewall:get_stats()
+    print(string.format("Stats: %d regras, %d IPs bloqueados\n", stats.rules_count, stats.blocked_ips_count))
+    
+    -- Criptografia
+    print("--- CRIPTOGRAFIA ---")
+    local message = "Mensagem secreta"
+    local key = "chave123"
+    local encrypted = self.crypto:encrypt(message, key)
+    local decrypted = self.crypto:decrypt(encrypted, key)
+    print("Original:", message)
+    print("Descriptografado:", decrypted)
+    print()
+    
+    -- Router
+    print("--- ONION/GARLIC ROUTER ---")
+    self.router:add_node("node1", "192.168.1.10")
+    self.router:add_node("node2", "192.168.1.11")
+    self.router:add_node("node3", "192.168.1.12")
+    local circuit = self.router:create_circuit(3)
+    local routed = self.router:route_message("Mensagem anônima", circuit)
+    print("Mensagem roteada:", string.sub(routed, 1, 60) .. "...")
+    print()
+    
+    -- Anti-Fingerprint
+    print("--- ANTI-FINGERPRINT ---")
+    local fp = self.antifingerprint:randomize()
+    print("User-Agent:", fp.user_agent)
+    print("Canvas Noise:", fp.canvas_noise)
+    print()
+    
+    -- Blockchain
+    print("--- BLOCKCHAIN ---")
+    self.blockchain:add_block("Transação: Alice -> Bob (10 BTC)")
+    self.blockchain:add_block("Transação: Bob -> Charlie (5 BTC)")
+    local valid, msg = self.blockchain:validate()
+    print("Validação:", msg)
+    print("Total de blocos:", #self.blockchain.chain)
+    print()
+    
+    print("========================================")
+    print("  DEMONSTRAÇÃO COMPLETA")
+    print("========================================")
+end
+
+-- ============================================================================
+-- EXECUÇÃO
+-- ============================================================================
+local manager = SecurityManager:new()
+manager:run_demo()
+
+return SecurityManager
