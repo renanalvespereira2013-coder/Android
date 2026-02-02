@@ -1,94 +1,205 @@
-@rem
-@rem Copyright 2015 the original author or authors.
-@rem
-@rem Licensed under the Apache License, Version 2.0 (the "License");
-@rem you may not use this file except in compliance with the License.
-@rem You may obtain a copy of the License at
-@rem
-@rem      https://www.apache.org/licenses/LICENSE-2.0
-@rem
-@rem Unless required by applicable law or agreed to in writing, software
-@rem distributed under the License is distributed on an "AS IS" BASIS,
-@rem WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-@rem See the License for the specific language governing permissions and
-@rem limitations under the License.
-@rem
-@rem SPDX-License-Identifier: Apache-2.0
-@rem
+use std::time::{Duration, Instant};
+use std::thread;
+use std::f64;
 
-@if "%DEBUG%"=="" @echo off
-@rem ##########################################################################
-@rem
-@rem  Gradle startup script for Windows
-@rem
-@rem ##########################################################################
+// Modos de operação do B12
+#[derive(Debug, Clone, Copy)]
+enum ModoOperacao {
+    Ar,      // Rápido e invisível
+    Tunel,   // Seguro mas lento
+}
 
-@rem Set local scope for the variables with windows NT shell
-if "%OS%"=="Windows_NT" setlocal
+// Status de rastreamento
+#[derive(Debug)]
+struct Rastreamento {
+    posicao_x: f64,
+    posicao_y: f64,
+    velocidade: f64,
+    timestamp: Instant,
+    modo: ModoOperacao,
+}
 
-set DIRNAME=%~dp0
-if "%DIRNAME%"=="" set DIRNAME=.
-@rem This is normally unused
-set APP_BASE_NAME=%~n0
-set APP_HOME=%DIRNAME%
+// O B12 Digital
+struct B12Digital {
+    id: String,
+    modo: ModoOperacao,
+    invisivel: bool,
+    historico_rastreamento: Vec<Rastreamento>,
+}
 
-@rem Resolve any "." and ".." in APP_HOME to make it shorter.
-for %%i in ("%APP_HOME%") do set APP_HOME=%%~fi
+impl B12Digital {
+    fn novo(id: String) -> Self {
+        B12Digital {
+            id,
+            modo: ModoOperacao::Ar,
+            invisivel: true,  // Sempre invisível por padrão
+            historico_rastreamento: Vec::new(),
+        }
+    }
 
-@rem Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
-set DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"
+    // Voar no ar digital - RÁPIDO
+    fn voar(&mut self, destino_x: f64, destino_y: f64) {
+        println!("\n🚀 B12 [{}] DECOLANDO no modo AR DIGITAL", self.id);
+        println!("   Status: {}", if self.invisivel { "👻 INVISÍVEL" } else { "👁️  VISÍVEL" });
+        
+        let mut posicao_x = 0.0;
+        let mut posicao_y = 0.0;
+        let velocidade = 150.0; // Muito rápido!
+        
+        let dx = destino_x - posicao_x;
+        let dy = destino_y - posicao_y;
+        let distancia = (dx * dx + dy * dy).sqrt();
+        let steps = (distancia / velocidade).ceil() as usize;
+        
+        for i in 0..=steps {
+            let progresso = i as f64 / steps as f64;
+            posicao_x = progresso * destino_x;
+            posicao_y = progresso * destino_y;
+            
+            self.registrar_rastreamento(posicao_x, posicao_y, velocidade);
+            
+            if i % 3 == 0 {
+                println!("   ✈️  Posição: ({:.1}, {:.1}) | Velocidade: {:.0} km/h", 
+                    posicao_x, posicao_y, velocidade);
+            }
+            
+            thread::sleep(Duration::from_millis(50)); // Rápido!
+        }
+        
+        println!("   ✅ B12 chegou ao destino! ({:.1}, {:.1})", destino_x, destino_y);
+    }
 
-@rem Find java.exe
-if defined JAVA_HOME goto findJavaFromJavaHome
+    // Modo túnel - SEGURO mas LENTO
+    fn tunel(&mut self, destino_x: f64, destino_y: f64) {
+        println!("\n🔒 B12 [{}] ENTRANDO NO TÚNEL SEGURO", self.id);
+        println!("   Status: 🛡️  MÁXIMA SEGURANÇA");
+        
+        let mut posicao_x = 0.0;
+        let mut posicao_y = 0.0;
+        let velocidade = 30.0; // Lento mas seguro
+        
+        let dx = destino_x - posicao_x;
+        let dy = destino_y - posicao_y;
+        let distancia = (dx * dx + dy * dy).sqrt();
+        let steps = (distancia / velocidade).ceil() as usize;
+        
+        for i in 0..=steps {
+            let progresso = i as f64 / steps as f64;
+            posicao_x = progresso * destino_x;
+            posicao_y = progresso * destino_y;
+            
+            self.registrar_rastreamento(posicao_x, posicao_y, velocidade);
+            
+            if i % 2 == 0 {
+                println!("   🔐 Posição: ({:.1}, {:.1}) | Criptografia ativa", 
+                    posicao_x, posicao_y);
+            }
+            
+            thread::sleep(Duration::from_millis(200)); // Mais lento
+        }
+        
+        println!("   ✅ B12 saiu do túnel com segurança! ({:.1}, {:.1})", destino_x, destino_y);
+    }
 
-set JAVA_EXE=java.exe
-%JAVA_EXE% -version >NUL 2>&1
-if %ERRORLEVEL% equ 0 goto execute
+    // Sistema "ACHO TUDO" - Rastreamento
+    fn registrar_rastreamento(&mut self, x: f64, y: f64, vel: f64) {
+        let rastreio = Rastreamento {
+            posicao_x: x,
+            posicao_y: y,
+            velocidade: vel,
+            timestamp: Instant::now(),
+            modo: self.modo,
+        };
+        self.historico_rastreamento.push(rastreio);
+    }
 
-echo. 1>&2
-echo ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH. 1>&2
-echo. 1>&2
-echo Please set the JAVA_HOME variable in your environment to match the 1>&2
-echo location of your Java installation. 1>&2
+    fn mostrar_rastreamento(&self) {
+        println!("\n📡 SISTEMA 'ACHO TUDO' - RASTREAMENTO COMPLETO");
+        println!("   B12 ID: {}", self.id);
+        println!("   Total de pontos rastreados: {}", self.historico_rastreamento.len());
+        
+        if let Some(ultimo) = self.historico_rastreamento.last() {
+            println!("   Última posição: ({:.1}, {:.1})", ultimo.posicao_x, ultimo.posicao_y);
+            println!("   Velocidade atual: {:.0} km/h", ultimo.velocidade);
+            println!("   Modo: {:?}", ultimo.modo);
+        }
+    }
 
-goto fail
+    // Alternar modo de operação
+    fn alternar_modo(&mut self) {
+        self.modo = match self.modo {
+            ModoOperacao::Ar => {
+                println!("\n🔄 Mudando para modo TÚNEL (seguro)");
+                ModoOperacao::Tunel
+            },
+            ModoOperacao::Tunel => {
+                println!("\n🔄 Mudando para modo AR (rápido)");
+                ModoOperacao::Ar
+            }
+        };
+    }
 
-:findJavaFromJavaHome
-set JAVA_HOME=%JAVA_HOME:"=%
-set JAVA_EXE=%JAVA_HOME%/bin/java.exe
+    // Transmitir dados (simulação)
+    fn transmitir_dados(&self, dados: &str) {
+        println!("\n📤 TRANSMITINDO DADOS");
+        println!("   Modo: {:?}", self.modo);
+        println!("   Invisível: {}", if self.invisivel { "SIM ✅" } else { "NÃO ❌" });
+        println!("   Payload: \"{}\"", dados);
+        
+        match self.modo {
+            ModoOperacao::Ar => {
+                println!("   ⚡ Transmissão no AR - ULTRA RÁPIDA!");
+                thread::sleep(Duration::from_millis(100));
+            },
+            ModoOperacao::Tunel => {
+                println!("   🔒 Transmissão no TÚNEL - ULTRA SEGURA!");
+                thread::sleep(Duration::from_millis(500));
+            }
+        }
+        
+        println!("   ✅ Dados transmitidos com sucesso!");
+    }
+}
 
-if exist "%JAVA_EXE%" goto execute
+fn main() {
+    println!("╔═══════════════════════════════════════╗");
+    println!("║     🚀 B12 DIGITAL - SISTEMA V1.0    ║");
+    println!("║      Feito em Rust - 100% Nativo     ║");
+    println!("╚═══════════════════════════════════════╝");
 
-echo. 1>&2
-echo ERROR: JAVA_HOME is set to an invalid directory: %JAVA_HOME% 1>&2
-echo. 1>&2
-echo Please set the JAVA_HOME variable in your environment to match the 1>&2
-echo location of your Java installation. 1>&2
+    // Criar B12
+    let mut b12 = B12Digital::novo("B12-ALPHA".to_string());
 
-goto fail
+    // Demonstração 1: Voo rápido no AR
+    println!("\n═══ DEMONSTRAÇÃO 1: VOO NO AR DIGITAL ═══");
+    b12.voar(100.0, 75.0);
+    b12.mostrar_rastreamento();
 
-:execute
-@rem Setup the command line
+    // Transmitir dados no modo ar
+    b12.transmitir_dados("HTTPS://exemplo.com/dados-secretos");
 
-set CLASSPATH=%APP_HOME%\gradle\wrapper\gradle-wrapper.jar
+    // Demonstração 2: Modo túnel seguro
+    println!("\n═══ DEMONSTRAÇÃO 2: MODO TÚNEL SEGURO ═══");
+    b12.alternar_modo();
+    b12.tunel(200.0, 150.0);
+    b12.mostrar_rastreamento();
 
+    // Transmitir dados no modo túnel
+    b12.transmitir_dados("Informações classificadas - Nível 5");
 
-@rem Execute Gradle
-"%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %GRADLE_OPTS% "-Dorg.gradle.appname=%APP_BASE_NAME%" -classpath "%CLASSPATH%" org.gradle.wrapper.GradleWrapperMain %*
-
-:end
-@rem End local scope for the variables with windows NT shell
-if %ERRORLEVEL% equ 0 goto mainEnd
-
-:fail
-rem Set variable GRADLE_EXIT_CONSOLE if you need the _script_ return code instead of
-rem the _cmd.exe /c_ return code!
-set EXIT_CODE=%ERRORLEVEL%
-if %EXIT_CODE% equ 0 set EXIT_CODE=1
-if not ""=="%GRADLE_EXIT_CONSOLE%" exit %EXIT_CODE%
-exit /b %EXIT_CODE%
-
-:mainEnd
-if "%OS%"=="Windows_NT" endlocal
-
-:omega
+    // Voltar ao modo ar
+    println!("\n═══ DEMONSTRAÇÃO 3: RETORNO AO MODO AR ═══");
+    b12.alternar_modo();
+    b12.voar(300.0, 250.0);
+    
+    // Relatório final
+    println!("\n╔═══════════════════════════════════════╗");
+    println!("║       📊 RELATÓRIO FINAL DO B12      ║");
+    println!("╚═══════════════════════════════════════╝");
+    b12.mostrar_rastreamento();
+    
+    println!("\n✨ B12 Digital operando perfeitamente!");
+    println!("   - Modo AR: Rápido e Invisível ✅");
+    println!("   - Modo TÚNEL: Lento mas Seguro ✅");
+    println!("   - Sistema ACHO TUDO: Ativo ✅");
+}
