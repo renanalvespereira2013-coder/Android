@@ -1,7 +1,264 @@
-Copyright 2018 DuckDuckGo
+; 改良版計算機プログラム (Programa de calculadora melhorado)
+; 作成者：Claude (Criador: Claude)
+; 特徴: モジュール化、柔軟性、メモリ管理の改善
 
-Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at
+section .data
+    ; 定数定義 (Definições de constantes)
+    SYS_EXIT  equ 1
+    SYS_WRITE equ 4
+    SYS_READ  equ 3
+    STDOUT    equ 1
+    STDIN     equ 0
+    
+    ; 数値定義 (Definições numéricas)
+    NUM_A dd 15        ; 第一数値 (Primeiro número)
+    NUM_B dd 25        ; 第二数値 (Segundo número)
+    LIMIT  dd 100      ; 閾値 (Valor limite)
+    
+    ; メッセージ定義 (Definições de mensagens)
+    msg_add      db '加算結果: ', 0
+    msg_mul      db '乗算結果: ', 0
+    msg_gt       db '結果は閾値より大きい', 10, 0
+    msg_le       db '結果は閾値以下', 10, 0
+    msg_error    db '演算エラー', 10, 0
+    msg_newline  db 10, 0
+    msg_input_a  db '第一数値を入力: ', 0
+    msg_input_b  db '第二数値を入力: ', 0
+    
+    ; フォーマット指定 (Especificações de formato)
+    fmt_int      db '%d', 0
+    buffer_size  equ 16
 
-http://www.apache.org/licenses/LICENSE-2.0
+section .bss
+    ; バッファ領域 (Área de buffer)
+    result       resd 1
+    temp_buf     resb buffer_size
+    input_buffer resb buffer_size
 
-Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License.
+section .text
+    global main
+    extern printf, scanf, atoi
+
+main:
+    ; スタックフレーム確立 (Estabelecer frame da pilha)
+    push ebp
+    mov ebp, esp
+    
+    ; ユーザー入力取得 (Obter entrada do usuário)
+    call get_user_input
+    
+    ; 加算実行 (Executar adição)
+    call perform_addition
+    test eax, eax
+    js .error
+    
+    ; 乗算実行 (Executar multiplicação)
+    call perform_multiplication
+    test eax, eax
+    js .error
+    
+    ; 閾値チェック (Verificar limite)
+    call check_threshold
+    
+    ; 結果表示 (Exibir resultados)
+    call display_results
+    
+    ; 正常終了 (Término normal)
+    xor eax, eax
+    jmp .exit
+    
+.error:
+    ; エラー処理 (Tratamento de erro)
+    push msg_error
+    call printf
+    add esp, 4
+    mov eax, 1
+    
+.exit:
+    ; スタックフレーム復元 (Restaurar frame da pilha)
+    mov esp, ebp
+    pop ebp
+    
+    ; プログラム終了 (Encerrar programa)
+    mov eax, SYS_EXIT
+    xor ebx, ebx
+    int 0x80
+
+; ユーザー入力取得関数 (Função para obter entrada do usuário)
+get_user_input:
+    push ebp
+    mov ebp, esp
+    
+    ; 第一数値入力 (Entrada do primeiro número)
+    push msg_input_a
+    call printf
+    add esp, 4
+    
+    push NUM_A
+    push fmt_int
+    call scanf
+    add esp, 8
+    
+    ; 第二数値入力 (Entrada do segundo número)
+    push msg_input_b
+    call printf
+    add esp, 4
+    
+    push NUM_B
+    push fmt_int
+    call scanf
+    add esp, 8
+    
+    pop ebp
+    ret
+
+; 加算実行関数 (Função para executar adição)
+perform_addition:
+    push ebp
+    mov ebp, esp
+    
+    mov eax, [NUM_A]
+    mov ebx, [NUM_B]
+    add eax, ebx
+    
+    ; オーバーフローチェック (Verificar overflow)
+    jo .overflow
+    
+    mov [result], eax
+    mov eax, 0  ; 成功コード (Código de sucesso)
+    jmp .end
+    
+.overflow:
+    mov eax, -1  ; エラーコード (Código de erro)
+    
+.end:
+    pop ebp
+    ret
+
+; 乗算実行関数 (Função para executar multiplicação)
+perform_multiplication:
+    push ebp
+    mov ebp, esp
+    
+    mov eax, [NUM_A]
+    mov ebx, [NUM_B]
+    imul ebx
+    
+    ; オーバーフローチェック (Verificar overflow)
+    jo .overflow
+    
+    ; 結果保存 (Salvar resultado)
+    mov [result], eax
+    mov eax, 0
+    jmp .end
+    
+.overflow:
+    mov eax, -1
+    
+.end:
+    pop ebp
+    ret
+
+; 閾値チェック関数 (Função para verificar limite)
+check_threshold:
+    push ebp
+    mov ebp, esp
+    
+    mov eax, [result]
+    cmp eax, [LIMIT]
+    jg .greater
+    
+    ; 閾値以下の場合 (Caso seja menor ou igual)
+    push msg_le
+    jmp .print
+    
+.greater:
+    ; 閾値より大きい場合 (Caso seja maior)
+    push msg_gt
+    
+.print:
+    call printf
+    add esp, 4
+    
+    pop ebp
+    ret
+
+; 結果表示関数 (Função para exibir resultados)
+display_results:
+    push ebp
+    mov ebp, esp
+    
+    ; 加算結果表示 (Exibir resultado da adição)
+    push msg_add
+    call printf
+    add esp, 4
+    
+    mov eax, [NUM_A]
+    add eax, [NUM_B]
+    push eax
+    push fmt_int
+    call printf
+    add esp, 8
+    
+    ; 改行 (Nova linha)
+    push msg_newline
+    call printf
+    add esp, 4
+    
+    ; 乗算結果表示 (Exibir resultado da multiplicação)
+    push msg_mul
+    call printf
+    add esp, 4
+    
+    mov eax, [NUM_A]
+    mov ebx, [NUM_B]
+    imul ebx
+    push eax
+    push fmt_int
+    call printf
+    add esp, 8
+    
+    ; 改行 (Nova linha)
+    push msg_newline
+    call printf
+    add esp, 4
+    
+    pop ebp
+    ret
+
+; データ変換関数 (Função de conversão de dados)
+string_to_int:
+    push ebp
+    mov ebp, esp
+    
+    mov esi, [ebp+8]  ; 文字列ポインタ (Ponteiro da string)
+    xor eax, eax
+    xor ecx, ecx
+    
+.convert_loop:
+    movzx edx, byte [esi]
+    test dl, dl
+    jz .done
+    
+    ; 数字チェック (Verificar se é dígito)
+    cmp dl, '0'
+    jb .error
+    cmp dl, '9'
+    ja .error
+    
+    ; 変換 (Conversão)
+    imul eax, 10
+    sub dl, '0'
+    add eax, edx
+    
+    inc esi
+    jmp .convert_loop
+    
+.done:
+    mov esp, ebp
+    pop ebp
+    ret
+    
+.error:
+    mov eax, -1
+    jmp .done
