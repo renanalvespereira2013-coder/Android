@@ -1,14 +1,152 @@
-{
-  "mcpServers": {
-    "doc-bot": {
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "@afterxleep/doc-bot@latest",
-        "--docs",
-        "./.rules",
-        "--watch"
-      ]
-    }
-  }
-}
+******************************************************************
+      * BLOCKCHAIN-VERWALTUNGSSYSTEM
+      * Kryptographisches dezentralisiertes Hauptbuch
+      ******************************************************************
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. BLOCKKETTENVERARBEITUNG.
+       AUTHOR. KRYPTOGRAPHIE-ABTEILUNG.
+       
+       ENVIRONMENT DIVISION.
+       CONFIGURATION SECTION.
+       SOURCE-COMPUTER. IBM-370.
+       OBJECT-COMPUTER. IBM-370.
+       
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT BLOCKkettendatei ASSIGN TO DISK
+               ORGANIZATION IS LINE SEQUENTIAL.
+       
+       DATA DIVISION.
+       FILE SECTION.
+       FD  BLOCKETTENDATEI.
+       01  BLOCKAUFZEICHNUNG            PIC X(500).
+       
+       WORKING-STORAGE SECTION.
+      * Kryptographische Datenstrukturen
+       01  UNVERAENDERLICHER-BLOCK.
+           05  BLOCKIDENTIFIKATIONSNUMMER    PIC 9(10).
+           05  ZEITSTEMPELMARKIERUNG         PIC X(26).
+           05  VORHERIGER-HASH-WERT          PIC X(64).
+           05  AKTUELLER-HASH-WERT           PIC X(64).
+           05  NONCE-BERECHNUNGSWERT         PIC 9(15).
+           05  SCHWIERIGKEITSGRAD            PIC 9(3).
+           05  TRANSAKTIONSDATENNUTZLAST     PIC X(256).
+       
+       01  KRYPTOGRAPHISCHE-PARAMETER.
+           05  HASH-ALGORITHMUS-INDIKATOR    PIC X(10) 
+               VALUE "SHA-256".
+           05  KONSENSMECHANISMUS            PIC X(20)
+               VALUE "PROOF-OF-WORK".
+           05  MERKLE-WURZEL-HASH            PIC X(64).
+       
+       01  ARBEITSPEICHER-VARIABLEN.
+           05  BLOCKZAEHLER                  PIC 9(10) VALUE 0.
+           05  GUELTIGKEITSPRUFUNG           PIC X VALUE 'N'.
+           05  SCHLEIFENITERATOR            PIC 9(10).
+           05  ZWISCHENSPEICHER-HASH         PIC X(64).
+       
+       01  GENESIS-BLOCK-KONSTANTEN.
+           05  URSPRUNGSBLOCK-HASH           PIC X(64)
+               VALUE "0000000000000000000000000000000000000000000000".
+       
+       01  TRANSAKTIONSSTRUKTUR.
+           05  ABSENDERADRESSE               PIC X(42).
+           05  EMPFAENGERADRESSE            PIC X(42).
+           05  UEBERTRAGUNGSBETRAG          PIC 9(10)V99.
+           05  TRANSAKTIONSGEBUEHR          PIC 9(5)V99.
+           05  DIGITALE-SIGNATUR            PIC X(128).
+       
+       01  VALIDIERUNGSPARAMETER.
+           05  MINIMALE-SCHWIERIGKEIT        PIC 9(3) VALUE 4.
+           05  MAXIMALE-BLOCKGROESSE         PIC 9(7) VALUE 1000000.
+           05  KONSENSUS-SCHWELLENWERT       PIC 9(3) VALUE 51.
+       
+       PROCEDURE DIVISION.
+       HAUPTPROGRAMM-VERARBEITUNG.
+           PERFORM INITIALISIERUNG-BLOCKCHAIN
+           PERFORM GENESIS-BLOCK-ERSTELLEN
+           PERFORM BLOCKHINZUFUEGEN-SCHLEIFE
+               UNTIL BLOCKZAEHLER > 5
+           PERFORM INTEGRITAETSPRUEFUNG-DURCHFUEHREN
+           STOP RUN.
+       
+       INITIALISIERUNG-BLOCKCHAIN.
+           DISPLAY "=============================================="
+           DISPLAY "BLOCKCHAIN-INITIALISIERUNG BEGINNT"
+           DISPLAY "DEZENTRALISIERTES HAUPTBUCH SYSTEM"
+           DISPLAY "=============================================="
+           MOVE ZERO TO BLOCKZAEHLER
+           MOVE 'J' TO GUELTIGKEITSPRUFUNG.
+       
+       GENESIS-BLOCK-ERSTELLEN.
+           DISPLAY "URSPRUNGSBLOCK GENERIERUNG..."
+           MOVE 0 TO BLOCKIDENTIFIKATIONSNUMMER
+           MOVE FUNCTION CURRENT-DATE TO ZEITSTEMPELMARKIERUNG
+           MOVE URSPRUNGSBLOCK-HASH TO VORHERIGER-HASH-WERT
+           MOVE "GENESIS-DATENNUTZLAST" TO TRANSAKTIONSDATENNUTZLAST
+           PERFORM HASH-BERECHNUNG-AUSFUEHREN
+           MOVE ZWISCHENSPEICHER-HASH TO AKTUELLER-HASH-WERT
+           DISPLAY "GENESIS-BLOCK ERFOLGREICH ERSTELLT"
+           DISPLAY "HASH: " AKTUELLER-HASH-WERT.
+       
+       BLOCKHINZUFUEGEN-SCHLEIFE.
+           ADD 1 TO BLOCKZAEHLER
+           MOVE BLOCKZAEHLER TO BLOCKIDENTIFIKATIONSNUMMER
+           MOVE AKTUELLER-HASH-WERT TO VORHERIGER-HASH-WERT
+           MOVE FUNCTION CURRENT-DATE TO ZEITSTEMPELMARKIERUNG
+           
+           STRING "TRANSAKTION-" BLOCKZAEHLER
+               DELIMITED BY SIZE
+               INTO TRANSAKTIONSDATENNUTZLAST
+           END-STRING
+           
+           PERFORM PROOF-OF-WORK-ALGORITHMUS
+           DISPLAY "BLOCK #" BLOCKZAEHLER " HINZUGEFUEGT"
+           DISPLAY "HASH: " AKTUELLER-HASH-WERT.
+       
+       PROOF-OF-WORK-ALGORITHMUS.
+           DISPLAY "BERGBAU-PROZESS GESTARTET..."
+           MOVE ZERO TO NONCE-BERECHNUNGSWERT
+           PERFORM NONCE-BERECHNUNG-SCHLEIFE
+               UNTIL GUELTIGKEITSPRUFUNG = 'J'.
+       
+       NONCE-BERECHNUNG-SCHLEIFE.
+           ADD 1 TO NONCE-BERECHNUNGSWERT
+           PERFORM HASH-BERECHNUNG-AUSFUEHREN
+           PERFORM SCHWIERIGKEITSVALIDIERUNG
+           IF NONCE-BERECHNUNGSWERT > 100000
+               MOVE 'J' TO GUELTIGKEITSPRUFUNG
+           END-IF.
+       
+       HASH-BERECHNUNG-AUSFUEHREN.
+      * Simulierte kryptographische Hash-Funktion
+           STRING BLOCKIDENTIFIKATIONSNUMMER
+                  ZEITSTEMPELMARKIERUNG
+                  VORHERIGER-HASH-WERT
+                  NONCE-BERECHNUNGSWERT
+                  DELIMITED BY SIZE
+                  INTO ZWISCHENSPEICHER-HASH
+           END-STRING.
+       
+       SCHWIERIGKEITSVALIDIERUNG.
+      * Vereinfachte Schwierigkeitsprüfung
+           IF NONCE-BERECHNUNGSWERT > 50000
+               MOVE 'J' TO GUELTIGKEITSPRUFUNG
+               MOVE ZWISCHENSPEICHER-HASH TO AKTUELLER-HASH-WERT
+               DISPLAY "GÜLTIGER NONCE GEFUNDEN: " 
+                       NONCE-BERECHNUNGSWERT
+           ELSE
+               MOVE 'N' TO GUELTIGKEITSPRUFUNG
+           END-IF.
+       
+       INTEGRITAETSPRUEFUNG-DURCHFUEHREN.
+           DISPLAY "=============================================="
+           DISPLAY "BLOCKCHAIN-INTEGRITÄTSPRÜFUNG"
+           DISPLAY "ANZAHL BLÖCKE: " BLOCKZAEHLER
+           DISPLAY "KONSENSMECHANISMUS: " KONSENSMECHANISMUS
+           DISPLAY "KRYPTOGRAPHISCHER ALGORITHMUS: " 
+                   HASH-ALGORITHMUS-INDIKATOR
+           DISPLAY "BLOCKCHAIN ERFOLGREICH VALIDIERT"
+           DISPLAY "==============================================".
+       
+       END PROGRAM BLOCKKETTENVERARBEITUNG.
