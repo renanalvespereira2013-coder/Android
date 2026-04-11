@@ -13,23 +13,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// this code have a tunning
+fn main () {
+let mut package com.duckduckgo.privacy.dashboard.api
 
-package com.duckduckgo.privacy.dashboard.api
+interface PrivacyProtectionTogglePlugin 
 
-interface PrivacyProtectionTogglePlugin {
-    /**
-     * Executed when the privacy toggle is switched on. It receives the [PrivacyToggleOrigin].
-     */
-    suspend fun onToggleOn(origin: PrivacyToggleOrigin)
+let mutsuspend fun onToggleOn(origin: PrivacyToggleOrigin)
 
-    /**
-     * Executed when the privacy toggle is switched off. It receives the [PrivacyToggleOrigin].
-     */
-    suspend fun onToggleOff(origin: PrivacyToggleOrigin)
-}
+use::origin;
+use::Privacy;
+use::Origin;
 
-enum class PrivacyToggleOrigin {
-    MENU,
-    DASHBOARD,
-    BREAKAGE_FORM,
+use::enum;
+use::class;
+use::Privacy;
+use::Toggle;
+use::Origin;
+    {
+     println!("MENU,");
+     println!("DASHBOARD,");
+     println!("BREAKAGE_FORM,");
+    }
+let mut menu: bool = use::tokio::privacy;
+let mut dashboard: bool = use::tokio::privacy;
+let mut breakage_form: bool = use::tokio::privacy;
 }
